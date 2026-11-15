@@ -72,10 +72,24 @@ CORS(app, resources={r"/api/*": {"origins": [
 # -----------------------------------------------------------------------
 MODEL_DIR = "./model"
 
-regression_pipeline = joblib.load(
-    os.path.join(MODEL_DIR, "lasso_regressor_for_sme_revenue.joblib")
-)
+REGRESSION_FIELDS = [
+    "major_subject",
+    "parental_education_level",
+    "internet_access_quality",
+    "part_time_job",
+    "study_group_participation",
+    "study_hours_per_week",
+    "attendance_rate_pct",
+    "previous_gpa",
+    "sleep_hours_per_night",
+    "extracurricular_activities_count",
+    "stress_level_score",
+    "tutoring_hours_per_week",
+]
 
+regression_pipeline = joblib.load(
+    os.path.join(MODEL_DIR, "student_exam_score_regressor.joblib")
+)
 classification_pipeline = joblib.load(
     os.path.join(MODEL_DIR, "svc_classifier_for_sme_credit_risk.joblib")
 )
@@ -95,58 +109,26 @@ sku_lookup = arm_artifact["sku_lookup"]
 print("All the four artifacts have been loaded. The API is ready.")
 
 
-# 1. REGRESSION -- predict monthly revenue (KES) for an SME
-
-# Sample request (cURL):
-#   curl -X POST http://127.0.0.1:5000/api/v1/models/sme-revenue-regressor/predictions \
-#        -H "Content-Type: application/json" \
-#        -d '{"sector": "Technology", "county": "Nairobi", "quarter": "Q3",
-#             "business_age_years": 4.5, "num_employees": 12,
-#             "owner_education_level": "Secondary",
-#             "monthly_marketing_spend_kes": 45000,
-#             "avg_daily_foot_traffic": null,
-#             "online_presence_score": 78.0, "loan_amount_kes": 250000,
-#             "interest_rate_pct": 14.5, "inflation_rate_pct": 6.5,
-#             "competitor_density": 5, "customer_satisfaction_score": 4.2}'
-#
-# Sample request (PowerShell):
-#   Invoke-RestMethod -Method Post `
-#     -Uri "http://127.0.0.1:5000/api/v1/models/sme-revenue-regressor/predictions" `
-#     -ContentType "application/json" `
-#     -Body (@{sector="Technology"; county="Nairobi"; quarter="Q3";
-#              business_age_years=4.5; num_employees=12;
-#              owner_education_level="Secondary";
-#              monthly_marketing_spend_kes=45000; avg_daily_foot_traffic=$null;
-#              online_presence_score=78.0; loan_amount_kes=250000;
-#              interest_rate_pct=14.5; inflation_rate_pct=6.5;
-#              competitor_density=5; customer_satisfaction_score=4.2} | ConvertTo-Json)
-#
-# Note: avg_daily_foot_traffic is deliberately null for a Technology-sector
-# business (fully online -- foot traffic is structurally not applicable, not
-# missing at random). The pipeline's own imputer handles the null value; nothing
-# in this file needs to know that rule.
-@app.route("/api/v1/models/sme-revenue-regressor/predictions", methods=["POST"])
+# 1. REGRESSION -- predict final exam score (0-100) for a student
+@app.route("/api/v1/models/student-exam-score-regressor/predictions", methods=["POST"])
 def predict_revenue():
-    payload = request.get_json()
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Request body must be a JSON object."}), 400
 
-    # Build a one-row DataFrame straight from the JSON body. No manual
-    # label-encoding, no manual date parsing, no manual column reordering, etc. --
-    # the pipeline's ColumnTransformer already knows which columns it expects
-    # and how to preprocess each one.
-    input_row = pd.DataFrame([payload])
+    missing = [field for field in REGRESSION_FIELDS if field not in payload]
+    if missing:
+        return jsonify({"error": f"Missing input field(s): {', '.join(missing)}"}), 400
 
-    predicted_log_revenue = regression_pipeline.predict(input_row)[0]
-    # The pipeline was trained on log1p(revenue) because revenue was
-    # right-skewed; we invert that single transformation here to report the
-    # predictions in KES.
-    import numpy as np
-    predicted_revenue_kes = float(np.expm1(predicted_log_revenue))
+    input_row = pd.DataFrame([{field: payload[field] for field in REGRESSION_FIELDS}])
+
+    # TransformedTargetRegressor automatically runs target_transformer.inverse_transform()
+    predicted_exam_score = float(regression_pipeline.predict(input_row)[0])
 
     return jsonify({
-        "predicted_monthly_revenue_kes": round(predicted_revenue_kes, 2),
-        "model": "Lasso Regressor",
+        "predicted_final_exam_score": round(predicted_exam_score, 2),
+        "model": "Ridge Regressor (with Yeo-Johnson target transformation)",
     })
-
 
 # 2. CLASSIFICATION -- predict SME credit risk category (Low/Medium/High)
 
