@@ -123,43 +123,30 @@ def health():
 
 # =======================================================================
 # MEMBER 1 (Lisa): REGRESSION
-# -----------------------------------------------------------------------
-# TODO (Lisa): replace the lecturer's SME revenue model with OUR regressor.
-1. #   Copy our saved file into model/ and change the filename below.
-
-#   2. Rename the URL to describe our model:
-#      /api/v1/models/<our-model-name>/predictions
-#   3. Update the sample request, the response keys and the "model" text.
-#   4. Remove the np.expm1(...) step unless our model was ALSO trained on
-#      log1p(target).
-#   5. Keep get_payload(...) and to_input_row(...) as they are.
 # =======================================================================
-regression_pipeline = load_artifact("lasso_regressor_for_sme_revenue.joblib")
+regression_pipeline = load_artifact("student_exam_score_regressor.joblib")
 REGRESSION_FIELDS = expected_fields(regression_pipeline)
 
 # Sample request (cURL):
-#   curl -X POST http://127.0.0.1:5000/api/v1/models/sme-revenue-regressor/predictions \
+#   curl -X POST http://127.0.0.1:5000/api/v1/models/student-exam-score-regressor/predictions \
 #        -H "Content-Type: application/json" \
-#        -d '{"sector": "Technology", "county": "Nairobi", "quarter": "Q3",
-#             "business_age_years": 4.5, "num_employees": 12,
-#             "owner_education_level": "Secondary",
-#             "monthly_marketing_spend_kes": 45000,
-#             "avg_daily_foot_traffic": null,
-#             "online_presence_score": 78.0, "loan_amount_kes": 250000,
-#             "interest_rate_pct": 14.5, "inflation_rate_pct": 6.5,
-#             "competitor_density": 5, "customer_satisfaction_score": 4.2}'
-@app.route("/api/v1/models/sme-revenue-regressor/predictions", methods=["POST"])
+#        -d '{"major_subject": "Engineering", "parental_education_level": "Bachelor'\''s",
+#            "internet_access_quality": "Good", "part_time_job": "No",
+#            "study_group_participation": "Yes", "study_hours_per_week": 9.5,
+#            "attendance_rate_pct": 88.0, "previous_gpa": 3.4,
+#            "sleep_hours_per_night": 7.0, "extracurricular_activities_count": 1,
+#            "stress_level_score": 5.0, "tutoring_hours_per_week": 2.0}'
+@app.route("/api/v1/models/student-exam-score-regressor/predictions", methods=["POST"])
 def predict_revenue():
     payload = get_payload(REGRESSION_FIELDS)
     input_row = to_input_row(payload, REGRESSION_FIELDS)
 
-    predicted_log_revenue = regression_pipeline.predict(input_row)[0]
-    # Trained on log1p(revenue), so invert that to report KES.
-    predicted_revenue_kes = float(np.expm1(predicted_log_revenue))
+    # TransformedTargetRegressor automatically runs target_transformer.inverse_transform()
+    predicted_exam_score = float(regression_pipeline.predict(input_row)[0])
 
     return jsonify({
-        "predicted_monthly_revenue_kes": round(predicted_revenue_kes, 2),
-        "model": "Lasso Regressor",
+        "predicted_final_exam_score": round(predicted_exam_score, 2),
+        "model": "Ridge Regressor (with Yeo-Johnson target transformation)",
     })
 
 
