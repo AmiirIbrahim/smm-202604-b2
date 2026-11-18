@@ -1,5 +1,6 @@
 import streamlit as st
 import joblib
+import numpy as np
 import pandas as pd
 import os
 
@@ -20,13 +21,21 @@ def load_artifacts():
         os.path.join(MODEL_DIR, "student_exam_score_regressor.joblib")
     )
     fraud_artifact = joblib.load(os.path.join(MODEL_DIR, "fraud_model_bundle.joblib"))
+    clustering_artifact = joblib.load(
+        os.path.join(MODEL_DIR, "kmeans_bank_wealth_segmentation.joblib")
+    )
     arm_artifact = joblib.load(os.path.join(MODEL_DIR, "arm_pharmacy_basket_rules.joblib"))
-    return regression_pipeline, fraud_artifact, arm_artifact
+    return regression_pipeline, fraud_artifact, clustering_artifact, arm_artifact
 
 
-regression_pipeline, fraud_artifact, arm_artifact = load_artifacts()
+regression_pipeline, fraud_artifact, clustering_artifact, arm_artifact = load_artifacts()
 classification_pipeline = fraud_artifact["model"]
 classification_threshold = float(fraud_artifact["threshold"])
+clustering_scaler = clustering_artifact["scaler"]
+clustering_kmeans = clustering_artifact["kmeans"]
+CLUSTERING_FEATURES = clustering_artifact["feature_order"]
+CLUSTER_REGION_MEDIANS = clustering_artifact["region_median_digital_score"]
+CLUSTER_NAMES = clustering_artifact["segment_names"]
 recommendation_lookup = arm_artifact["recommendation_lookup"]
 sku_lookup = arm_artifact["sku_lookup"]
 
@@ -52,9 +61,8 @@ CLASSIFICATION_FIELDS = list(fraud_artifact["features"])
 
 st.title("BBT 4206 Model Demos")
 st.caption("Live model validation using the team's saved artifacts")
-
 tab_regression, tab_classification, tab_clustering, tab_recommender = st.tabs([
-    "Exam score", "Fraud classification", "Clustering · pending", "Pharmacy recommender",
+    "Exam score", "Fraud classification", "Bank Wealth Segmenter", "Pharmacy recommender",
 ])
 
 
@@ -116,8 +124,71 @@ with tab_classification:
         except (TypeError, ValueError, KeyError) as error:
             st.error(str(error))
 
+def predict_segment(account_balance_kes, transactions_per_month, years_as_customer,
+                    digital_banking_usage_score, branch_region):
+    account_balance = float(account_balance_kes)
+    transactions = float(transactions_per_month)
+    tenure = float(years_as_customer)
+    digital_score = (
+        None if digital_banking_usage_score is None
+        else float(digital_banking_usage_score)
+    )
+    values = [account_balance, transactions, tenure]
+    if digital_score is not None:
+        values.append(digital_score)
+    if not np.isfinite(values).all():
+        raise ValueError("Inputs must be finite numbers.")
+    if account_balance <= 0:
+        raise ValueError("Account balance must be greater than zero.")
+    if transactions < 0 or tenure < 0:
+        raise ValueError("Transactions and customer tenure cannot be negative.")
+    if digital_score is not None and not 0 <= digital_score <= 100:
+        raise ValueError("Digital usage score must be between 0 and 100.")
+    if digital_score is None:
+        if branch_region not in CLUSTER_REGION_MEDIANS:
+            raise ValueError("Choose a known branch region when the digital score is missing.")
+        digital_score = float(CLUSTER_REGION_MEDIANS[branch_region])
+
+    transformed_values = {
+        "log10_account_balance": float(np.log10(account_balance)),
+        "transactions_per_month": transactions,
+        "years_as_customer": tenure,
+        "digital_banking_usage_score": digital_score,
+    }
+    input_row = pd.DataFrame([{
+        feature: transformed_values[feature] for feature in CLUSTERING_FEATURES
+    }])
+    scaled_input = clustering_scaler.transform(input_row)
+    cluster = int(clustering_kmeans.predict(scaled_input)[0])
+    return cluster, CLUSTER_NAMES.get(cluster, f"Cluster {cluster}")
+
+
 with tab_clustering:
-    st.info("Clustering will be available after Amiir's bank segmentation is merged.")
+    with st.form("clustering_form"):
+        account_balance_kes = st.number_input(
+            "Account Balance (KES)", min_value=1.0, value=2400000.0, step=1000.0)
+        transactions_per_month = st.number_input(
+            "Transactions per Month", min_value=0.0, value=9.0, step=1.0)
+        years_as_customer = st.number_input(
+            "Years as Customer", min_value=0.0, value=11.0, step=0.5)
+        region_options = sorted(CLUSTER_REGION_MEDIANS)
+        region_index = region_options.index("Nairobi") if "Nairobi" in region_options else 0
+        branch_region = st.selectbox("Branch Region", region_options, index=region_index)
+        digital_score_missing = st.checkbox("Digital usage score is missing")
+        digital_banking_usage_score = None
+        if not digital_score_missing:
+            digital_banking_usage_score = st.number_input(
+                "Digital Banking Usage Score", min_value=0.0, max_value=100.0, value=55.0)
+        submitted3 = st.form_submit_button("Predict Segment")
+
+    if submitted3:
+        try:
+            cluster, cluster_name = predict_segment(
+                account_balance_kes, transactions_per_month, years_as_customer,
+                digital_banking_usage_score, branch_region)
+            st.success(f"{cluster_name} (cluster {cluster})")
+        except (TypeError, ValueError, OverflowError) as error:
+            st.error(str(error))
 
 with tab_recommender:
     st.subheader("Pharmacy basket recommendations")

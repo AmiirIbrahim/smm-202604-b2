@@ -2,6 +2,7 @@ import os
 
 import gradio as gr
 import joblib
+import numpy as np
 import pandas as pd
 
 # -----------------------------------------------------------------------
@@ -13,6 +14,14 @@ MODEL_DIR = os.path.join(APP_DIR, "model")
 if not os.path.isdir(MODEL_DIR):
     MODEL_DIR = os.path.abspath(os.path.join(APP_DIR, "..", "model"))
 
+clustering_artifact = joblib.load(
+    os.path.join(MODEL_DIR, "kmeans_bank_wealth_segmentation.joblib")
+)
+clustering_scaler = clustering_artifact["scaler"]
+clustering_kmeans = clustering_artifact["kmeans"]
+CLUSTERING_FEATURES = clustering_artifact["feature_order"]
+CLUSTER_REGION_MEDIANS = clustering_artifact["region_median_digital_score"]
+CLUSTER_NAMES = clustering_artifact["segment_names"]
 
 def load_artifact(filename):
     return joblib.load(os.path.join(MODEL_DIR, filename))
@@ -93,10 +102,50 @@ def predict_fraud(*values):
 
 
 # -----------------------------------------------------------------------
-# 3. Clustering -- pending Member 3's merge to main
+# 3. Clustering -- assign a bank account to a wealth-management segment
 # -----------------------------------------------------------------------
-def predict_segment(*_values):
-    raise gr.Error("Clustering will be available after Amiir's bank model is merged.")
+def predict_segment(account_balance_kes, transactions_per_month, years_as_customer,
+                    digital_banking_usage_score, branch_region):
+    try:
+        account_balance = float(account_balance_kes)
+        transactions = float(transactions_per_month)
+        tenure = float(years_as_customer)
+        digital_score = (
+            None if digital_banking_usage_score is None
+            else float(digital_banking_usage_score)
+        )
+    except (TypeError, ValueError, OverflowError):
+        raise gr.Error("Enter numeric values; the digital score may be left blank.")
+
+    values = [account_balance, transactions, tenure]
+    if digital_score is not None:
+        values.append(digital_score)
+    if not np.isfinite(values).all():
+        raise gr.Error("Inputs must be finite numbers.")
+    if account_balance <= 0:
+        raise gr.Error("Account balance must be greater than zero.")
+    if transactions < 0 or tenure < 0:
+        raise gr.Error("Transactions and customer tenure cannot be negative.")
+    if digital_score is not None and not 0 <= digital_score <= 100:
+        raise gr.Error("Digital usage score must be between 0 and 100.")
+    if digital_score is None:
+        if branch_region not in CLUSTER_REGION_MEDIANS:
+            raise gr.Error("Choose a known branch region when the digital score is blank.")
+        digital_score = float(CLUSTER_REGION_MEDIANS[branch_region])
+
+    transformed_values = {
+        "log10_account_balance": float(np.log10(account_balance)),
+        "transactions_per_month": transactions,
+        "years_as_customer": tenure,
+        "digital_banking_usage_score": digital_score,
+    }
+    input_row = pd.DataFrame([{
+        feature: transformed_values[feature] for feature in CLUSTERING_FEATURES
+    }])
+    scaled_input = clustering_scaler.transform(input_row)
+    cluster = int(clustering_kmeans.predict(scaled_input)[0])
+    cluster_name = CLUSTER_NAMES.get(cluster, f"Cluster {cluster}")
+    return f"{cluster_name} (cluster {cluster})"
 
 
 # -----------------------------------------------------------------------
@@ -132,7 +181,7 @@ def recommend_products(cart_text, top_n):
 
 
 # -----------------------------------------------------------------------
-# One Gradio app with the three merged models and the pending clustering tab.
+# One Gradio app with one tab per model.
 # -----------------------------------------------------------------------
 with gr.Blocks(title="BBT 4206 Model Demos") as demo:
     gr.Markdown("# BBT 4206 Model Demos")
@@ -151,8 +200,22 @@ with gr.Blocks(title="BBT 4206 Model Demos") as demo:
             outputs=gr.JSON(label="Prediction"),
         )
 
-    with gr.Tab("Clustering · pending"):
-        gr.Markdown("Clustering will be available after Amiir's bank segmentation is merged.")
+    with gr.Tab("Bank Wealth Segmenter"):
+        gr.Interface(
+            fn=predict_segment,
+            inputs=[
+                gr.Number(label="Account Balance (KES)", value=2400000),
+                gr.Number(label="Transactions per Month", value=9),
+                gr.Number(label="Years as Customer", value=11),
+                gr.Number(label="Digital Banking Usage Score (leave blank if unknown)", value=55),
+                gr.Dropdown(
+                    label="Branch Region",
+                    choices=sorted(CLUSTER_REGION_MEDIANS),
+                    value="Nairobi",
+                ),
+            ],
+            outputs=gr.Textbox(label="Assigned Segment"),
+        )
 
     with gr.Tab("Pharmacy recommender"):
         gr.Interface(

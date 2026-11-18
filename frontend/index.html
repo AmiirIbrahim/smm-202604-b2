@@ -154,8 +154,8 @@
   <nav class="model-tabs" role="tablist" aria-label="Model endpoint">
     <button type="button" role="tab" data-model="regression" aria-selected="true">Exam score</button>
     <button type="button" role="tab" data-model="classification" aria-selected="false">Fraud classification</button>
+    <button type="button" role="tab" data-model="clustering" aria-selected="false">Bank wealth segments</button>
     <button type="button" role="tab" data-model="recommender" aria-selected="false">Pharmacy basket</button>
-    <button type="button" disabled aria-label="Clustering pending merge">Clustering · pending</button>
   </nav>
   <section class="workspace">
     <div id="modelPanel" role="tabpanel"></div>
@@ -166,7 +166,7 @@
   </section>
 </main>
 <footer class="console-footer">
-  Clustering will be enabled after Amiir’s bank segmentation is merged. The sample requests are also in the
+  The digital score can be left blank to use the selected region's training median. The sample requests are also in the
   <a href="../postman/ml_api.postman_collection.json">Postman collection</a>.
 </footer>
 <script>
@@ -210,6 +210,18 @@
         ["customer_credit_score", "Customer credit score", "number", 540]
       ]
     },
+    clustering: {
+      title: "Bank wealth segmentation",
+      endpoint: "/api/v1/models/bank-wealth-segmenter/predictions",
+      description: "Assign an account to a behavior-based service segment.",
+      fields: [
+        ["account_balance_kes", "Account balance (KES)", "number", 2400000],
+        ["transactions_per_month", "Transactions per month", "number", 9],
+        ["years_as_customer", "Years as customer", "number", 11],
+        ["digital_banking_usage_score", "Digital usage score (0-100; optional)", "optional-number", 55],
+        ["branch_region", "Branch region (used if digital score is blank)", "optional-text", "Nairobi"]
+      ]
+    },
     recommender: {
       title: "Pharmacy basket recommendations",
       endpoint: "/api/v1/models/pharmacy-recommender/predictions",
@@ -245,8 +257,8 @@
       label.textContent = labelText;
       input.id = inputId;
       input.name = key;
-      input.required = true;
-      if (kind === "number") {
+      input.required = kind !== "optional-number" && kind !== "optional-text";
+      if (kind === "number" || kind === "optional-number") {
         input.type = "number";
         input.step = "any";
       } else {
@@ -273,7 +285,14 @@
     const payload = {};
     for (const [key, , kind] of config.fields) {
       const rawValue = form.elements[key].value.trim();
-      if (kind === "number") {
+      if (rawValue === "" && kind === "optional-number") {
+        payload[key] = null;
+      } else if (rawValue === "" && kind === "optional-text") {
+        continue;
+      } else if (rawValue === "") {
+        result.textContent = JSON.stringify({ error: `Please fill in ${key}.` }, null, 2);
+        return;
+      } else if (kind === "number" || kind === "optional-number") {
         payload[key] = Number(rawValue);
       } else if (kind === "items") {
         payload[key] = rawValue.split(",").map((item) => item.trim()).filter(Boolean);
