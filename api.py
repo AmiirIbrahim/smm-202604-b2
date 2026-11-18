@@ -211,36 +211,72 @@ def predict_credit_risk():
 # =======================================================================
 # MEMBER 3 (Amiir): CLUSTERING
 # -----------------------------------------------------------------------
-# TODO (Amiir): replace the lecturer's mall customer model with OUR k-Means
-# model.
-#   1. Copy our saved file into model/ and change the filename below.
-#      If we saved the scaler and k-Means in separate files, load each one.
-#   2. Rename the URL: /api/v1/models/<our-model-name>/predictions
-#   3. Update the sample request, the response and the "model" text
-#      (our k and features). Add cluster names if our lab described them.
-#   4. If we did not scale, drop the scaler and call kmeans.predict(...)
-#      directly. Keep get_payload(...) and to_input_row(...).
+# Load the bank wealth-management model and its training-time preprocessing.
 # =======================================================================
-clustering_artifact = load_artifact("kmeans_mall_customer_segmentation.joblib")
+clustering_artifact = load_artifact("kmeans_bank_wealth_segmentation.joblib")
 clustering_scaler = clustering_artifact["scaler"]
 clustering_kmeans = clustering_artifact["kmeans"]
-CLUSTERING_FIELDS = expected_fields(clustering_scaler)
+CLUSTERING_FEATURES = clustering_artifact["feature_order"]
+CLUSTER_REGION_MEDIANS = clustering_artifact["region_median_digital_score"]
+CLUSTER_NAMES = clustering_artifact["segment_names"]
+CLUSTERING_INPUT_FIELDS = [
+    "account_balance_kes",
+    "transactions_per_month",
+    "years_as_customer",
+    "digital_banking_usage_score",
+]
 
 # Sample request (cURL):
-#   curl -X POST http://127.0.0.1:5000/api/v1/models/mall-customer-segmenter/predictions \
+#   curl -X POST http://127.0.0.1:5000/api/v1/models/bank-wealth-segmenter/predictions \
 #        -H "Content-Type: application/json" \
-#        -d '{"Age": 27, "Annual Income (k$)": 45, "Spending Score (1-100)": 72}'
-@app.route("/api/v1/models/mall-customer-segmenter/predictions", methods=["POST"])
+#        -d '{"account_balance_kes": 2400000, "transactions_per_month": 9, \
+#             "years_as_customer": 11, "digital_banking_usage_score": 55}'
+@app.route("/api/v1/models/bank-wealth-segmenter/predictions", methods=["POST"])
 def predict_customer_segment():
-    payload = get_payload(CLUSTERING_FIELDS)
-    input_row = to_input_row(payload, CLUSTERING_FIELDS)
+    payload = get_payload(CLUSTERING_INPUT_FIELDS)
+    try:
+        account_balance = float(payload["account_balance_kes"])
+        transactions_per_month = float(payload["transactions_per_month"])
+        years_as_customer = float(payload["years_as_customer"])
+        digital_value = payload["digital_banking_usage_score"]
+        digital_score = None if digital_value is None else float(digital_value)
+    except (TypeError, ValueError, OverflowError):
+        raise InputError("All clustering inputs must be numbers, except a null digital score.")
 
+    numeric_values = [account_balance, transactions_per_month, years_as_customer]
+    if digital_score is not None:
+        numeric_values.append(digital_score)
+    if not np.isfinite(numeric_values).all():
+        raise InputError("Clustering inputs must be finite numbers.")
+    if account_balance <= 0:
+        raise InputError("account_balance_kes must be greater than zero.")
+    if transactions_per_month < 0 or years_as_customer < 0:
+        raise InputError("Transactions and customer tenure cannot be negative.")
+    if digital_score is not None and not 0 <= digital_score <= 100:
+        raise InputError("digital_banking_usage_score must be between 0 and 100.")
+
+    if digital_score is None:
+        branch_region = str(payload.get("branch_region", "")).strip()
+        if branch_region not in CLUSTER_REGION_MEDIANS:
+            raise InputError("A known branch_region is required when the digital score is null.")
+        digital_score = float(CLUSTER_REGION_MEDIANS[branch_region])
+
+    transformed_values = {
+        "log10_account_balance": float(np.log10(account_balance)),
+        "transactions_per_month": transactions_per_month,
+        "years_as_customer": years_as_customer,
+        "digital_banking_usage_score": digital_score,
+    }
+    input_row = pd.DataFrame([{
+        feature: transformed_values[feature] for feature in CLUSTERING_FEATURES
+    }])
     scaled_input = clustering_scaler.transform(input_row)
     assigned_cluster = int(clustering_kmeans.predict(scaled_input)[0])
 
     return jsonify({
-        "assigned_cluster": assigned_cluster,
-        "model": "K-Means (k=5, standardized features)",
+        "model": "kmeans",
+        "cluster": assigned_cluster,
+        "cluster_name": CLUSTER_NAMES.get(assigned_cluster, f"Cluster {assigned_cluster}"),
     })
 
 
