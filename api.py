@@ -229,11 +229,10 @@ CLUSTERING_INPUT_FIELDS = [
 ]
 
 # Sample request (cURL):
-#   curl -X POST http://127.0.0.1:5000/predict/cluster \
+#   curl -X POST http://127.0.0.1:5000/api/v1/models/bank-wealth-segmenter/predictions \
 #        -H "Content-Type: application/json" \
 #        -d '{"account_balance_kes": 2400000, "transactions_per_month": 9, \
 #             "years_as_customer": 11, "digital_banking_usage_score": 55}'
-@app.route("/predict/cluster", methods=["POST"])
 @app.route("/api/v1/models/bank-wealth-segmenter/predictions", methods=["POST"])
 def predict_customer_segment():
     payload = get_payload(CLUSTERING_INPUT_FIELDS)
